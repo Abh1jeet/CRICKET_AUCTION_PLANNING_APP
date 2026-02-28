@@ -15,6 +15,10 @@ from players import (
     TOTAL_PLAYERS, TOTAL_AUCTION_PLAYERS,
     classify_role, compute_overall, classify_tier,
 )
+from optimizer import (
+    analyze_squad_needs, solve_optimal_squad,
+    recommend_max_bid, get_ranked_recommendations,
+)
 
 # ── Page config ──────────────────────────────────────────────────────
 st.set_page_config(
@@ -523,39 +527,118 @@ with tab4:
         ms4.metric("Total Fielding", total_field)
 
     st.divider()
-    st.markdown("### 🎯 Recommended Targets")
     unsold_available = get_unsold_players()
 
     if unsold_available and auc_slots_left > 0:
-        my_bat_count = role_count_full(my_team, "Batsman")
-        my_bowl_count = role_count_full(my_team, "Bowler")
-        my_ar_count = role_count_full(my_team, "All-rounder")
+        # ── Squad Needs Analysis ──────────────────────────────────
+        analysis = analyze_squad_needs(my_squad)
+        st.markdown("### 🔬 Squad Needs Analysis")
 
-        needs = []
-        if my_bat_count < 4:
-            needs.append("Batsman")
-        if my_bowl_count < 3:
-            needs.append("Bowler")
-        if my_ar_count < 3:
-            needs.append("All-rounder")
+        na1, na2, na3, na4 = st.columns(4)
+        na1.metric("🎳 Can Bowl", f"{analysis['bowlers_who_can_bowl']}/6",
+                   delta=f"Need {analysis['bowlers_needed']} more" if analysis['bowlers_needed'] > 0 else "✅ Met")
+        na2.metric("🏏 Batsmen", analysis['bat_count'])
+        na3.metric("🎳 Bowlers", analysis['bowl_count'])
+        na4.metric("⭐ All-rounders", analysis['ar_count'])
 
-        if needs:
-            st.info(f"🔍 You need more: **{', '.join(needs)}**")
+        if analysis['role_needs']:
+            need_labels = [n for n in analysis['role_needs'] if n != 'need_bowlers']
+            if analysis['bowlers_needed'] > 0:
+                need_labels.append(f"Bowling options ({analysis['bowlers_needed']} more needed)")
+            st.warning(f"⚠️ Squad gaps: **{', '.join(need_labels)}**")
         else:
-            st.success("✅ Balanced squad composition!")
+            st.success("✅ Squad composition is balanced!")
 
-        for tier_num in [1, 2, 3, 4]:
-            tier_players = [p for p in unsold_available if p["tier"] == tier_num]
-            if tier_players:
-                tier_emoji = {1: "🥇", 2: "🥈", 3: "🥉", 4: "🏷️"}[tier_num]
-                with st.expander(f"{tier_emoji} Tier {tier_num} Available ({len(tier_players)} players)"):
-                    for p in sorted(tier_players, key=lambda x: -x["overall"]):
-                        need_badge = "🎯" if p["role"] in needs else ""
-                        st.markdown(
-                            f"{need_badge} **{p['name']}** — {p['role']} | "
-                            f"Bat {p['batting']} Bowl {p['bowling']} Field {p['fielding']} | "
-                            f"OVR {p['overall']}"
-                        )
+        # ── MILP Optimal Dream Picks ─────────────────────────────
+        st.divider()
+        st.markdown("### 🧠 AI Optimal Squad (MILP Solver)")
+        st.caption("Mixed Integer Linear Programming finds the mathematically best 9 players within budget.")
+
+        optimal = solve_optimal_squad(unsold_available, my_squad, my_remaining, auc_slots_left)
+        if optimal:
+            opt_ovr = sum(p['overall'] for p in optimal)
+            full_ovr = sum(p['overall'] for p in my_squad) + opt_ovr
+            st.markdown(f"**Optimal picks add {opt_ovr:.1f} OVR** → Full squad OVR: **{full_ovr:.1f}**")
+
+            opt_data = []
+            for rank, p in enumerate(sorted(optimal, key=lambda x: -x['overall']), 1):
+                can_b = "✅" if p['bowling'] >= 4 else "❌"
+                opt_data.append({
+                    "#": rank, "Name": p['name'], "Role": p['role'],
+                    "Tier": f"⭐{p['tier']}", "OVR": p['overall'],
+                    "Bat": p['batting'], "Bowl": p['bowling'], "Field": p['fielding'],
+                    "Can Bowl": can_b,
+                })
+            st.dataframe(pd.DataFrame(opt_data), use_container_width=True, hide_index=True)
+        else:
+            st.info("Solver could not find a feasible solution with current constraints.")
+
+        # ── Per-Player Recommendation ────────────────────────────
+        st.divider()
+        st.markdown("### 🎯 Player-by-Player Recommendation")
+        st.caption("For each available player: should you buy? And up to how much?")
+
+        recs = get_ranked_recommendations(unsold_available, my_squad, my_remaining, auc_slots_left)
+
+        if recs:
+            # Summary table
+            rec_table = []
+            for rank, r in enumerate(recs, 1):
+                in_opt = "⭐" if r.get('in_optimal') else ""
+                rec_table.append({
+                    "Rank": rank,
+                    "Player": r['name'],
+                    "Role": r['role'],
+                    "Tier": r['tier'],
+                    "OVR": r['overall'],
+                    "Score": r['score'],
+                    "Max Bid (₹L)": r['recommended_max'],
+                    "Verdict": r['verdict'],
+                    "In Optimal": in_opt,
+                })
+            st.dataframe(pd.DataFrame(rec_table), use_container_width=True, hide_index=True)
+
+            # Detailed per-player cards
+            st.divider()
+            st.markdown("### 🔍 Detailed Player Analysis")
+            st.caption("Select a player to see detailed bid recommendation.")
+
+            player_labels = {f"{r['name']} ({r['role']} | Tier {r['tier']})": r['id'] for r in recs}
+            sel_label = st.selectbox("Pick a player to analyze", list(player_labels.keys()), key="rec_player")
+            sel_id = player_labels[sel_label]
+            sel_p = next(p for p in unsold_available if p['id'] == sel_id)
+
+            bid_info = recommend_max_bid(sel_p, my_squad, unsold_available, my_remaining, auc_slots_left)
+
+            # Verdict card
+            verdict_colors = {
+                "🟢 MUST BUY": "#28a745",
+                "🟡 GOOD BUY": "#ffc107",
+                "🟡 NEED-BASED BUY": "#ffc107",
+                "🟡 BOWLING NEED": "#ffc107",
+                "🔴 SKIP / BASE ONLY": "#dc3545",
+            }
+            v_color = verdict_colors.get(bid_info['verdict'], "#6c757d")
+
+            st.markdown(f"""
+            <div class="team-card" style="background: {v_color}; text-align: left;">
+                <p class="metric-big">{bid_info['verdict']}</p>
+                <p>{bid_info['verdict_detail']}</p>
+                <hr style="opacity:0.3">
+                <p>💰 <b>Recommended Max Bid: ₹{bid_info['recommended_max']}L</b> (Hard cap: ₹{bid_info['hard_max']}L)</p>
+                <p>📊 Marginal Value: <b>+{bid_info['marginal_value']} OVR</b> | Need Premium: {bid_info['need_premium']} | Tier Bonus: {bid_info['tier_premium']}</p>
+                <p>📈 Without: {bid_info['baseline_ovr']} OVR → With: {bid_info['boosted_ovr']} OVR</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Player stats
+            st.markdown("")
+            det1, det2, det3, det4 = st.columns(4)
+            det1.metric("🏏 Batting", sel_p['batting'])
+            det2.metric("🎳 Bowling", sel_p['bowling'])
+            det3.metric("🧤 Fielding", sel_p['fielding'])
+            det4.metric("📊 Overall", sel_p['overall'])
+
     elif auc_slots_left == 0:
         st.success("🎉 Squad complete! You have all 11 players.")
     else:
