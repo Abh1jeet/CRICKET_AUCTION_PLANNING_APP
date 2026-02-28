@@ -1,0 +1,781 @@
+"""
+🏏 CricBazaar — Cricket Auction Planner
+Streamlit app: 44 players (4 captains + 4 VCs pre-assigned, 36 in auction).
+Each team ends with 11 players (2 fixed + 9 from auction).
+"""
+
+import streamlit as st
+import pandas as pd
+import copy
+import io
+from players import (
+    PLAYERS, AUCTION_PLAYERS, CAPTAINS, VICE_CAPTAINS,
+    TEAMS, PRE_ASSIGNED, BUDGET_PER_TEAM, BASE_PRICE,
+    BID_INCREMENT, SQUAD_SIZE, AUCTION_SLOTS,
+    TOTAL_PLAYERS, TOTAL_AUCTION_PLAYERS,
+    classify_role, compute_overall, classify_tier,
+)
+
+# ── Page config ──────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="🏏 CricBazaar — Auction Planner",
+    page_icon="🏏",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ── Custom CSS ───────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    .team-card {
+        border-radius: 12px; padding: 18px; margin: 8px 0;
+        color: white; text-align: center;
+    }
+    .metric-big { font-size: 2rem; font-weight: 800; margin: 0; }
+    .metric-label { font-size: 0.85rem; opacity: 0.85; }
+    .tier-1 { background: linear-gradient(135deg, #FFD700, #FFA500); color: #333; }
+    .tier-2 { background: linear-gradient(135deg, #C0C0C0, #A0A0A0); color: #333; }
+    .tier-3 { background: linear-gradient(135deg, #CD7F32, #A0522D); color: white; }
+    .tier-4 { background: linear-gradient(135deg, #708090, #556677); color: white; }
+    div[data-testid="stExpander"] { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 8px; }
+    .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px 8px 0 0; padding: 8px 20px; font-weight: 600;
+    }
+    .captain-badge { background: #FFD700; color: #333; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
+    .vc-badge { background: #C0C0C0; color: #333; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Session state init ───────────────────────────────────────────────
+if "auction_log" not in st.session_state:
+    st.session_state.auction_log = {}   # player_id -> {"team": str, "price": int}
+
+if "player_data" not in st.session_state:
+    st.session_state.player_data = copy.deepcopy(PLAYERS)
+
+
+# ── Helper functions ─────────────────────────────────────────────────
+def get_pre_assigned_players(team_name):
+    """Return the captain + VC pre-assigned to this team."""
+    result = []
+    for p in st.session_state.player_data:
+        if p.get("tag") in ("Captain", "Vice-Captain") and p.get("team") == team_name:
+            result.append({**p, "sold_price": 0})
+    return result
+
+
+def get_auction_players(team_name):
+    """Return auction players bought by this team."""
+    result = []
+    for pid, info in st.session_state.auction_log.items():
+        if info["team"] == team_name:
+            player = next(p for p in st.session_state.player_data if p["id"] == pid)
+            result.append({**player, "sold_price": info["price"]})
+    return result
+
+
+def get_full_squad(team_name):
+    """All players: pre-assigned + auction bought."""
+    return get_pre_assigned_players(team_name) + get_auction_players(team_name)
+
+
+def get_team_budget_spent(team_name):
+    return sum(info["price"] for info in st.session_state.auction_log.values() if info["team"] == team_name)
+
+
+def get_team_remaining(team_name):
+    return BUDGET_PER_TEAM - get_team_budget_spent(team_name)
+
+
+def get_auction_count(team_name):
+    """How many auction players this team bought."""
+    return sum(1 for info in st.session_state.auction_log.values() if info["team"] == team_name)
+
+
+def get_unsold_players():
+    sold_ids = set(st.session_state.auction_log.keys())
+    return [p for p in st.session_state.player_data
+            if p["id"] not in sold_ids and p.get("tag") is None]
+
+
+def role_count_full(team_name, role):
+    return sum(1 for p in get_full_squad(team_name) if p["role"] == role)
+
+
+def tier_count_full(team_name, tier):
+    return sum(1 for p in get_full_squad(team_name) if p["tier"] == tier)
+
+
+def max_affordable(team_name):
+    """Max a team can bid = remaining - (auction_slots_left - 1) * BASE_PRICE"""
+    remaining = get_team_remaining(team_name)
+    slots_left = AUCTION_SLOTS - get_auction_count(team_name)
+    if slots_left <= 1:
+        return remaining
+    return remaining - (slots_left - 1) * BASE_PRICE
+
+
+def recalc_player(player):
+    """Recalculate derived fields after a rating update."""
+    player["role"] = classify_role(player)
+    player["overall"] = compute_overall(player)
+    player["tier"] = classify_tier(player)
+
+
+def build_team_csv(team_name):
+    """Build a CSV string for a team's full squad."""
+    squad = get_full_squad(team_name)
+    rows = []
+    for i, p in enumerate(squad, 1):
+        tag = p.get("tag", "Auction")
+        rows.append({
+            "#": i,
+            "Name": p["name"],
+            "Role": p["role"],
+            "Type": tag,
+            "Tier": p["tier"],
+            "Batting": p["batting"],
+            "Bowling": p["bowling"],
+            "Fielding": p["fielding"],
+            "Overall": p["overall"],
+            "Price (₹L)": p.get("sold_price", 0),
+        })
+    df = pd.DataFrame(rows)
+    buf = io.StringIO()
+    df.to_csv(buf, index=False)
+    return buf.getvalue()
+
+
+# ── Sidebar ──────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 🏏 CricBazaar")
+    st.markdown("### Cricket Auction Planner")
+    st.caption("44 players · 4 teams · 11 per squad")
+    st.divider()
+
+    sold = len(st.session_state.auction_log)
+    st.markdown(f"**Auction Progress:** {sold} / {TOTAL_AUCTION_PLAYERS} sold")
+    st.progress(sold / TOTAL_AUCTION_PLAYERS if TOTAL_AUCTION_PLAYERS else 0)
+
+    st.divider()
+    st.markdown("### 💰 Budget Snapshot")
+    for tname, tinfo in TEAMS.items():
+        remaining = get_team_remaining(tname)
+        auc_count = get_auction_count(tname)
+        total_count = auc_count + 2  # +captain +VC
+        pct = remaining / BUDGET_PER_TEAM
+        st.markdown(
+            f"{tinfo['emoji']} **{tname}** — ₹{remaining}L left | "
+            f"{total_count}/{SQUAD_SIZE} players ({auc_count} bought)"
+        )
+        st.progress(pct)
+
+    st.divider()
+
+    # Pre-assigned reference
+    with st.expander("👑 Captains & Vice-Captains"):
+        for tname in TEAMS:
+            pre = get_pre_assigned_players(tname)
+            cap = next((p for p in pre if p.get("tag") == "Captain"), None)
+            vc = next((p for p in pre if p.get("tag") == "Vice-Captain"), None)
+            st.markdown(f"**{tname}:**")
+            if cap:
+                st.markdown(f"  🏅 C: {cap['name']} ({cap['role']})")
+            if vc:
+                st.markdown(f"  🥈 VC: {vc['name']} ({vc['role']})")
+
+    st.divider()
+    if st.button("🔄 Reset Entire Auction", type="secondary", use_container_width=True):
+        st.session_state.auction_log = {}
+        st.rerun()
+
+    st.divider()
+    with st.expander("👨‍💻 Developer Details"):
+        st.markdown(
+            """
+            **Developed with ❤️ by Abhijeet**
+
+            [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/abh1jeet/)
+
+            [![GitHub Repo](https://img.shields.io/badge/GitHub-Repo-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/abh1jeet/founders-bid)
+
+            *CricBazaar v1.0 · March 2026*
+            """
+        )
+
+# ── Main title ───────────────────────────────────────────────────────
+st.markdown("# 🏏 CricBazaar — Live Auction Planner")
+st.markdown("*Founder's Cup · 44 players · 4 teams · 11 per squad (2 fixed + 9 auction)*")
+
+# ── Tabs ─────────────────────────────────────────────────────────────
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "⚡ Live Auction",
+    "📊 Team Dashboard",
+    "📋 Player Pool",
+    "🏆 My Strategy (Abhijeet)",
+    "📈 Tier Analysis",
+    "✏️ Edit Ratings",
+])
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 1 — LIVE AUCTION
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with tab1:
+    st.markdown("## ⚡ Record a Player Sale")
+    unsold = get_unsold_players()
+
+    if not unsold:
+        st.success("🎉 All 36 auction players have been sold!")
+    else:
+        col_form, col_preview = st.columns([3, 2])
+
+        with col_form:
+            player_options = {
+                f"{p['name']} (Tier {p['tier']} | {p['role']} | OVR {p['overall']})": p["id"]
+                for p in unsold
+            }
+            selected_label = st.selectbox("🎯 Select Player", list(player_options.keys()))
+            selected_id = player_options[selected_label]
+            selected_player = next(p for p in unsold if p["id"] == selected_id)
+
+            eligible_teams = [t for t in TEAMS if get_auction_count(t) < AUCTION_SLOTS]
+            if not eligible_teams:
+                st.warning("All teams have filled their 9 auction slots!")
+            else:
+                sold_to = st.selectbox("🏷️ Sold to Team", eligible_teams)
+                max_bid = max_affordable(sold_to)
+                sold_price = st.number_input(
+                    f"💰 Sold Price (₹L) — Base: {BASE_PRICE}, Max: {max_bid}",
+                    min_value=BASE_PRICE,
+                    max_value=max(BASE_PRICE, max_bid),
+                    value=BASE_PRICE,
+                    step=BID_INCREMENT,
+                )
+
+                if st.button("✅ Confirm Sale", type="primary", use_container_width=True):
+                    st.session_state.auction_log[selected_id] = {"team": sold_to, "price": sold_price}
+                    st.success(f"🎉 {selected_player['name']} sold to **{sold_to}** for ₹{sold_price}L!")
+                    st.rerun()
+
+        with col_preview:
+            st.markdown("### 🔍 Player Preview")
+            tier_class = f"tier-{selected_player['tier']}"
+            st.markdown(f"""
+            <div class="team-card {tier_class}">
+                <p class="metric-big">{selected_player['name']}</p>
+                <p class="metric-label">Tier {selected_player['tier']} | {selected_player['role']}</p>
+                <hr style="opacity:0.3">
+                <p>🏏 Bat: <b>{selected_player['batting']}</b> | 🎳 Bowl: <b>{selected_player['bowling']}</b> | 🧤 Field: <b>{selected_player['fielding']}</b></p>
+                <p class="metric-label">Overall: <b>{selected_player['overall']}</b></p>
+            </div>
+            """, unsafe_allow_html=True)
+
+    # Auction log
+    st.divider()
+    st.markdown("### 📜 Auction Log")
+    if st.session_state.auction_log:
+        log_data = []
+        for pid, info in reversed(list(st.session_state.auction_log.items())):
+            p = next(pl for pl in st.session_state.player_data if pl["id"] == pid)
+            log_data.append({
+                "Player": p["name"], "Role": p["role"], "Tier": p["tier"],
+                "OVR": p["overall"], "Team": info["team"], "Price (₹L)": info["price"],
+            })
+        st.dataframe(pd.DataFrame(log_data), use_container_width=True, hide_index=True)
+
+        if st.button("↩️ Undo Last Sale"):
+            last_pid = list(st.session_state.auction_log.keys())[-1]
+            last_name = next(p["name"] for p in st.session_state.player_data if p["id"] == last_pid)
+            del st.session_state.auction_log[last_pid]
+            st.info(f"Undid sale of {last_name}")
+            st.rerun()
+    else:
+        st.info("No players sold yet. Start the auction above!")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 2 — TEAM DASHBOARD
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with tab2:
+    st.markdown("## 📊 Team Dashboard")
+
+    team_cols = st.columns(4)
+    for idx, (tname, tinfo) in enumerate(TEAMS.items()):
+        with team_cols[idx]:
+            remaining = get_team_remaining(tname)
+            auc_count = get_auction_count(tname)
+            total_count = auc_count + 2
+            full_squad = get_full_squad(tname)
+
+            st.markdown(f"""
+            <div class="team-card" style="background: {tinfo['color']};">
+                <p class="metric-big">{tinfo['emoji']} {tname}</p>
+                <p class="metric-label">Budget: ₹{remaining}L / ₹{BUDGET_PER_TEAM}L</p>
+                <p class="metric-big">{total_count}/{SQUAD_SIZE}</p>
+                <p class="metric-label">{auc_count}/9 auction · 2 fixed</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Role breakdown (full squad)
+            bat_c = role_count_full(tname, "Batsman")
+            bowl_c = role_count_full(tname, "Bowler")
+            ar_c = role_count_full(tname, "All-rounder")
+            st.markdown(f"🏏 Bat: **{bat_c}** | 🎳 Bowl: **{bowl_c}** | ⭐ AR: **{ar_c}**")
+
+            # Tier breakdown
+            t1 = tier_count_full(tname, 1)
+            t2 = tier_count_full(tname, 2)
+            t3 = tier_count_full(tname, 3)
+            t4 = tier_count_full(tname, 4)
+            st.markdown(f"🥇T1: **{t1}** | 🥈T2: **{t2}** | 🥉T3: **{t3}** | T4: **{t4}**")
+
+            ma = max_affordable(tname)
+            st.caption(f"Max affordable bid: ₹{ma}L")
+
+            # Full squad expander
+            if full_squad:
+                with st.expander(f"View {tname}'s Full Squad ({len(full_squad)})"):
+                    # Captain & VC first
+                    for p in full_squad:
+                        tag = p.get("tag", "")
+                        if tag == "Captain":
+                            badge = "🏅 C"
+                        elif tag == "Vice-Captain":
+                            badge = "🥈 VC"
+                        else:
+                            badge = {1: "🥇", 2: "🥈", 3: "🥉", 4: "🏷️"}[p["tier"]]
+                        price_str = f"₹{p['sold_price']}L" if p.get("sold_price", 0) > 0 else "Pre-assigned"
+                        st.markdown(f"{badge} **{p['name']}** — {p['role']} | OVR {p['overall']} | {price_str}")
+
+            # Download button
+            csv_data = build_team_csv(tname)
+            st.download_button(
+                label=f"📥 Download {tname}'s Sheet",
+                data=csv_data,
+                file_name=f"{tname}_squad.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+    # Comparison table
+    st.divider()
+    st.markdown("### 📊 Team Comparison")
+    comp_data = []
+    for tname in TEAMS:
+        squad = get_full_squad(tname)
+        avg_ovr = round(sum(p["overall"] for p in squad) / len(squad), 1) if squad else 0
+        comp_data.append({
+            "Team": tname,
+            "Total": len(squad),
+            "Auction Bought": get_auction_count(tname),
+            "Budget Spent": f"₹{get_team_budget_spent(tname)}L",
+            "Budget Left": f"₹{get_team_remaining(tname)}L",
+            "Batsmen": role_count_full(tname, "Batsman"),
+            "Bowlers": role_count_full(tname, "Bowler"),
+            "All-rounders": role_count_full(tname, "All-rounder"),
+            "Avg OVR": avg_ovr,
+            "Tier 1": tier_count_full(tname, 1),
+            "Tier 2": tier_count_full(tname, 2),
+            "Tier 3": tier_count_full(tname, 3),
+            "Tier 4": tier_count_full(tname, 4),
+        })
+    st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
+
+    # Tier 1 team sheet
+    st.divider()
+    st.markdown("### ⭐ Tier 1 Team Sheet (Captains & Vice-Captains)")
+    sheet_rows = []
+    for p in CAPTAINS + VICE_CAPTAINS:
+        matched = next((pl for pl in st.session_state.player_data if pl["id"] == p["id"]), None)
+        sheet_rows.append({
+            "Team": p["team"],
+            "Player": p["name"],
+            "Tag": p["tag"],
+            "Role": p.get("forced_role", ""),
+            "Tier": "⭐ Tier 1",
+            "Batting": matched["batting"] if matched else p["batting"],
+            "Bowling": matched["bowling"] if matched else p["bowling"],
+            "Fielding": matched["fielding"] if matched else p["fielding"],
+            "Overall": matched["overall"] if matched else "",
+        })
+    st.dataframe(pd.DataFrame(sheet_rows), use_container_width=True, hide_index=True)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 3 — PLAYER POOL
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with tab3:
+    st.markdown("## 📋 Complete Player Pool (44 Players)")
+
+    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+    with filter_col1:
+        role_filter = st.multiselect("Role", ["Batsman", "Bowler", "All-rounder"],
+                                     default=["Batsman", "Bowler", "All-rounder"])
+    with filter_col2:
+        tier_filter = st.multiselect("Tier", [1, 2, 3, 4], default=[1, 2, 3, 4])
+    with filter_col3:
+        type_filter = st.multiselect("Type", ["Auction", "Captain", "Vice-Captain"],
+                                     default=["Auction", "Captain", "Vice-Captain"])
+    with filter_col4:
+        status_filter = st.radio("Status", ["All", "Unsold Only", "Sold/Assigned"], horizontal=True)
+
+    pool_data = []
+    for p in st.session_state.player_data:
+        if p["role"] not in role_filter or p["tier"] not in tier_filter:
+            continue
+        tag = p.get("tag", "Auction")
+        if tag not in type_filter:
+            continue
+
+        is_pre = p["id"] in PRE_ASSIGNED
+        is_auction_sold = p["id"] in st.session_state.auction_log
+        if status_filter == "Unsold Only" and (is_pre or is_auction_sold):
+            continue
+        if status_filter == "Sold/Assigned" and not is_pre and not is_auction_sold:
+            continue
+
+        sold_info = st.session_state.auction_log.get(p["id"], {})
+        if is_pre:
+            status_str = f"🏅 {PRE_ASSIGNED[p['id']]['tag']} → {PRE_ASSIGNED[p['id']]['team']}"
+        elif is_auction_sold:
+            status_str = f"✅ {sold_info['team']}"
+        else:
+            status_str = "🔲 Available"
+
+        price_str = f"₹{sold_info['price']}L" if is_auction_sold else ("Fixed" if is_pre else "—")
+
+        pool_data.append({
+            "ID": p["id"], "Name": p["name"], "Type": tag,
+            "Role": p["role"], "Tier": f"⭐ {p['tier']}",
+            "Bat": p["batting"], "Bowl": p["bowling"], "Field": p["fielding"],
+            "OVR": p["overall"], "Status": status_str, "Price": price_str,
+        })
+
+    pool_df = pd.DataFrame(pool_data)
+    if not pool_df.empty:
+        pool_df = pool_df.sort_values("OVR", ascending=False)
+    st.dataframe(pool_df, use_container_width=True, hide_index=True)
+    st.caption(f"Showing {len(pool_df)} of {TOTAL_PLAYERS} players")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 4 — MY STRATEGY (ABHIJEET)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with tab4:
+    st.markdown("## 🏆 Abhijeet's Strategy Console")
+
+    my_team = "Abhijeet"
+    my_squad = get_full_squad(my_team)
+    my_remaining = get_team_remaining(my_team)
+    my_auc_count = get_auction_count(my_team)
+    auc_slots_left = AUCTION_SLOTS - my_auc_count
+
+    col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+    col_s1.metric("💰 Budget Left", f"₹{my_remaining}L")
+    col_s2.metric("👥 Squad", f"{len(my_squad)}/{SQUAD_SIZE}")
+    col_s3.metric("🎯 Auction Slots Left", auc_slots_left)
+    col_s4.metric("💸 Max Bid", f"₹{max_affordable(my_team)}L")
+
+    st.divider()
+
+    # Current squad
+    st.markdown("### 🏏 My Current Squad")
+    my_bat = [p for p in my_squad if p["role"] == "Batsman"]
+    my_bowl = [p for p in my_squad if p["role"] == "Bowler"]
+    my_ar = [p for p in my_squad if p["role"] == "All-rounder"]
+
+    rc1, rc2, rc3 = st.columns(3)
+    with rc1:
+        st.markdown("#### 🏏 Batsmen")
+        for p in my_bat:
+            tag_str = f" <span class='captain-badge'>{p['tag']}</span>" if p.get("tag") else ""
+            price = f"₹{p['sold_price']}L" if p.get("sold_price", 0) > 0 else "Fixed"
+            st.markdown(f"• **{p['name']}** (OVR {p['overall']}) — {price}{tag_str}", unsafe_allow_html=True)
+        if not my_bat:
+            st.caption("None yet")
+    with rc2:
+        st.markdown("#### 🎳 Bowlers")
+        for p in my_bowl:
+            tag_str = f" <span class='captain-badge'>{p['tag']}</span>" if p.get("tag") else ""
+            price = f"₹{p['sold_price']}L" if p.get("sold_price", 0) > 0 else "Fixed"
+            st.markdown(f"• **{p['name']}** (OVR {p['overall']}) — {price}{tag_str}", unsafe_allow_html=True)
+        if not my_bowl:
+            st.caption("None yet")
+    with rc3:
+        st.markdown("#### ⭐ All-rounders")
+        for p in my_ar:
+            tag_str = f" <span class='captain-badge'>{p['tag']}</span>" if p.get("tag") else ""
+            price = f"₹{p['sold_price']}L" if p.get("sold_price", 0) > 0 else "Fixed"
+            st.markdown(f"• **{p['name']}** (OVR {p['overall']}) — {price}{tag_str}", unsafe_allow_html=True)
+        if not my_ar:
+            st.caption("None yet")
+
+    # Squad strength
+    if my_squad:
+        avg_ovr = round(sum(p["overall"] for p in my_squad) / len(my_squad), 1)
+        total_bat = sum(p["batting"] for p in my_squad)
+        total_bowl = sum(p["bowling"] for p in my_squad)
+        total_field = sum(p["fielding"] for p in my_squad)
+        st.divider()
+        st.markdown("### 📊 Squad Strength")
+        ms1, ms2, ms3, ms4 = st.columns(4)
+        ms1.metric("Avg Overall", avg_ovr)
+        ms2.metric("Total Batting", total_bat)
+        ms3.metric("Total Bowling", total_bowl)
+        ms4.metric("Total Fielding", total_field)
+
+    st.divider()
+    st.markdown("### 🎯 Recommended Targets")
+    unsold_available = get_unsold_players()
+
+    if unsold_available and auc_slots_left > 0:
+        my_bat_count = role_count_full(my_team, "Batsman")
+        my_bowl_count = role_count_full(my_team, "Bowler")
+        my_ar_count = role_count_full(my_team, "All-rounder")
+
+        needs = []
+        if my_bat_count < 4:
+            needs.append("Batsman")
+        if my_bowl_count < 3:
+            needs.append("Bowler")
+        if my_ar_count < 3:
+            needs.append("All-rounder")
+
+        if needs:
+            st.info(f"🔍 You need more: **{', '.join(needs)}**")
+        else:
+            st.success("✅ Balanced squad composition!")
+
+        for tier_num in [1, 2, 3, 4]:
+            tier_players = [p for p in unsold_available if p["tier"] == tier_num]
+            if tier_players:
+                tier_emoji = {1: "🥇", 2: "🥈", 3: "🥉", 4: "🏷️"}[tier_num]
+                with st.expander(f"{tier_emoji} Tier {tier_num} Available ({len(tier_players)} players)"):
+                    for p in sorted(tier_players, key=lambda x: -x["overall"]):
+                        need_badge = "🎯" if p["role"] in needs else ""
+                        st.markdown(
+                            f"{need_badge} **{p['name']}** — {p['role']} | "
+                            f"Bat {p['batting']} Bowl {p['bowling']} Field {p['fielding']} | "
+                            f"OVR {p['overall']}"
+                        )
+    elif auc_slots_left == 0:
+        st.success("🎉 Squad complete! You have all 11 players.")
+    else:
+        st.warning("No unsold players remaining.")
+
+    # Download my team
+    st.divider()
+    csv_data = build_team_csv(my_team)
+    st.download_button(
+        label="📥 Download My Squad Sheet",
+        data=csv_data,
+        file_name="Abhijeet_squad.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 5 — TIER ANALYSIS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with tab5:
+    st.markdown("## 📈 Tier-Level Distribution Analysis")
+
+    # Overall tier distribution
+    st.markdown("### 🌐 All 44 Players by Tier")
+    tier_summary = {"Tier": [], "Count": [], "Players": []}
+    for t in [1, 2, 3, 4]:
+        tp = [p for p in st.session_state.player_data if p["tier"] == t]
+        tier_summary["Tier"].append(f"Tier {t}")
+        tier_summary["Count"].append(len(tp))
+        names = []
+        for p in sorted(tp, key=lambda x: -x["overall"]):
+            tag = ""
+            if p.get("tag") == "Captain":
+                tag = " 🏅C"
+            elif p.get("tag") == "Vice-Captain":
+                tag = " 🥈VC"
+            names.append(f"{p['name']}{tag}")
+        tier_summary["Players"].append(", ".join(names))
+    st.dataframe(pd.DataFrame(tier_summary), use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # Per-team tier distribution
+    st.markdown("### 🏷️ Tier Distribution by Team (Full Squad)")
+    tier_team_cols = st.columns(4)
+    for idx, (tname, tinfo) in enumerate(TEAMS.items()):
+        with tier_team_cols[idx]:
+            st.markdown(f"#### {tinfo['emoji']} {tname}")
+            squad = get_full_squad(tname)
+            if not squad:
+                st.caption("Only captain & VC (no auction buys)")
+
+            for t in [1, 2, 3, 4]:
+                tp = [p for p in squad if p["tier"] == t]
+                if tp:
+                    tier_emoji = {1: "🥇", 2: "🥈", 3: "🥉", 4: "🏷️"}[t]
+                    st.markdown(f"**{tier_emoji} Tier {t}** ({len(tp)})")
+                    for p in tp:
+                        tag_str = f" [{p['tag']}]" if p.get("tag") else ""
+                        st.markdown(f"  • {p['name']}{tag_str} ({p['role']}, OVR {p['overall']})")
+
+    st.divider()
+
+    # Tier-wise spending
+    st.markdown("### 💰 Tier-wise Spending Analysis")
+    if st.session_state.auction_log:
+        spend_data = []
+        for tname in TEAMS:
+            auc_players = get_auction_players(tname)
+            for t in [1, 2, 3, 4]:
+                tp = [p for p in auc_players if p["tier"] == t]
+                total_spend = sum(p["sold_price"] for p in tp)
+                avg_price = round(total_spend / len(tp), 1) if tp else 0
+                spend_data.append({
+                    "Team": tname, "Tier": f"Tier {t}",
+                    "Players": len(tp), "Total Spent": f"₹{total_spend}L",
+                    "Avg Price": f"₹{avg_price}L",
+                })
+        st.dataframe(pd.DataFrame(spend_data), use_container_width=True, hide_index=True)
+    else:
+        st.info("Spending analysis will appear once auction starts.")
+
+    st.divider()
+    st.markdown("### 📖 Tier Classification Guide")
+    guide_c1, guide_c2, guide_c3, guide_c4 = st.columns(4)
+    with guide_c1:
+        st.markdown("""
+        <div class="team-card tier-1">
+            <p class="metric-big">🥇 Tier 1</p>
+            <p>OVR ≥ 7.5 or Captain/VC</p>
+            <p class="metric-label">Elite — bid aggressively</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with guide_c2:
+        st.markdown("""
+        <div class="team-card tier-2">
+            <p class="metric-big">🥈 Tier 2</p>
+            <p>OVR ≥ 5.5</p>
+            <p class="metric-label">Strong — solid value</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with guide_c3:
+        st.markdown("""
+        <div class="team-card tier-3">
+            <p class="metric-big">🥉 Tier 3</p>
+            <p>OVR ≥ 3.5</p>
+            <p class="metric-label">Decent — fill gaps</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with guide_c4:
+        st.markdown("""
+        <div class="team-card tier-4">
+            <p class="metric-big">🏷️ Tier 4</p>
+            <p>OVR &lt; 3.5</p>
+            <p class="metric-label">Budget — base price</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 6 — EDIT PLAYER RATINGS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with tab6:
+    st.markdown("## ✏️ Edit Player Ratings")
+    st.markdown("*Update batting, bowling & fielding ratings. Tier and role auto-recalculate.*")
+
+    # Bulk edit
+    st.markdown("### 📝 Bulk Edit (Table)")
+    edit_rows = []
+    for p in st.session_state.player_data:
+        edit_rows.append({
+            "ID": p["id"], "Name": p["name"],
+            "Type": p.get("tag", "Auction"),
+            "Batting": p["batting"], "Bowling": p["bowling"], "Fielding": p["fielding"],
+            "Role (auto)": p["role"], "Overall (auto)": p["overall"], "Tier (auto)": p["tier"],
+        })
+
+    edit_df = pd.DataFrame(edit_rows)
+    edited_df = st.data_editor(
+        edit_df,
+        column_config={
+            "ID": st.column_config.NumberColumn("ID", disabled=True),
+            "Name": st.column_config.TextColumn("Name", disabled=True),
+            "Type": st.column_config.TextColumn("Type", disabled=True),
+            "Batting": st.column_config.NumberColumn("🏏 Batting", min_value=0, max_value=10, step=1),
+            "Bowling": st.column_config.NumberColumn("🎳 Bowling", min_value=0, max_value=10, step=1),
+            "Fielding": st.column_config.NumberColumn("🧤 Fielding", min_value=0, max_value=10, step=1),
+            "Role (auto)": st.column_config.TextColumn("Role", disabled=True),
+            "Overall (auto)": st.column_config.NumberColumn("Overall", disabled=True),
+            "Tier (auto)": st.column_config.NumberColumn("Tier", disabled=True),
+        },
+        use_container_width=True, hide_index=True, num_rows="fixed",
+        key="player_editor",
+    )
+
+    if st.button("💾 Save All Rating Changes", type="primary", use_container_width=True):
+        changes = 0
+        for _, row in edited_df.iterrows():
+            pid = int(row["ID"])
+            player = next(p for p in st.session_state.player_data if p["id"] == pid)
+            new_bat, new_bowl, new_field = int(row["Batting"]), int(row["Bowling"]), int(row["Fielding"])
+            if player["batting"] != new_bat or player["bowling"] != new_bowl or player["fielding"] != new_field:
+                player["batting"] = new_bat
+                player["bowling"] = new_bowl
+                player["fielding"] = new_field
+                recalc_player(player)
+                changes += 1
+        if changes:
+            st.success(f"✅ Updated {changes} player(s). Tiers & roles recalculated!")
+            st.rerun()
+        else:
+            st.info("No changes detected.")
+
+    st.divider()
+
+    # Quick edit
+    st.markdown("### 🎯 Quick Edit (Single Player)")
+    player_names = {f"{p['name']} ({p.get('tag', 'Auction')})": p["id"] for p in st.session_state.player_data}
+    selected_name = st.selectbox("Select Player", list(player_names.keys()), key="edit_select")
+    sel_player = next(p for p in st.session_state.player_data if p["id"] == player_names[selected_name])
+
+    qe1, qe2, qe3 = st.columns(3)
+    with qe1:
+        new_batting = st.slider("🏏 Batting", 0, 10, sel_player["batting"], key="qe_bat")
+    with qe2:
+        new_bowling = st.slider("🎳 Bowling", 0, 10, sel_player["bowling"], key="qe_bowl")
+    with qe3:
+        new_fielding = st.slider("🧤 Fielding", 0, 10, sel_player["fielding"], key="qe_field")
+
+    preview = {**sel_player, "batting": new_batting, "bowling": new_bowling, "fielding": new_fielding}
+    preview_ovr = compute_overall(preview)
+    preview_tier = classify_tier(preview)
+    preview_role = classify_role(preview)
+
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        st.markdown(f"**Current:** Role `{sel_player['role']}` | OVR `{sel_player['overall']}` | Tier `{sel_player['tier']}`")
+    with pc2:
+        changed = (new_batting != sel_player["batting"] or new_bowling != sel_player["bowling"] or new_fielding != sel_player["fielding"])
+        st.markdown(f"**Preview {'🔄' if changed else '✅'}:** Role `{preview_role}` | OVR `{preview_ovr}` | Tier `{preview_tier}`")
+
+    if st.button("💾 Save This Player", use_container_width=True):
+        sel_player["batting"] = new_batting
+        sel_player["bowling"] = new_bowling
+        sel_player["fielding"] = new_fielding
+        recalc_player(sel_player)
+        st.success(f"✅ {sel_player['name']} → Tier {sel_player['tier']} | {sel_player['role']} | OVR {sel_player['overall']}")
+        st.rerun()
+
+    # Download all teams
+    st.divider()
+    st.markdown("### 📥 Download All Team Sheets")
+    dl_cols = st.columns(4)
+    for idx, tname in enumerate(TEAMS):
+        with dl_cols[idx]:
+            csv = build_team_csv(tname)
+            st.download_button(
+                label=f"📥 {tname}",
+                data=csv,
+                file_name=f"{tname}_squad.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key=f"dl_{tname}",
+            )
