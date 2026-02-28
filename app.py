@@ -18,6 +18,13 @@ from players import (
 from optimizer import (
     analyze_squad_needs, solve_optimal_squad,
     recommend_max_bid, get_ranked_recommendations,
+    estimate_competition, predict_auction_price,
+    build_best_team_snapshot,
+)
+from ai_insights import (
+    check_ollama_status, get_bid_advice,
+    get_best_team_analysis, get_live_auction_insight,
+    get_post_auction_review, get_player_comparison,
 )
 
 # ── Page config ──────────────────────────────────────────────────────
@@ -127,6 +134,32 @@ def recalc_player(player):
     player["tier"] = classify_tier(player)
 
 
+def build_all_teams_data():
+    """Build a dict of all teams' current state for optimizer & AI."""
+    data = {}
+    for tname in TEAMS:
+        squad = get_full_squad(tname)
+        data[tname] = {
+            "squad": squad,
+            "budget_left": get_team_remaining(tname),
+            "slots_left": AUCTION_SLOTS - get_auction_count(tname),
+            "budget_spent": get_team_budget_spent(tname),
+        }
+    return data
+
+
+def build_auction_log_data():
+    """Build a list of auction log entries for AI context."""
+    log_data = []
+    for pid, info in st.session_state.auction_log.items():
+        p = next(pl for pl in st.session_state.player_data if pl["id"] == pid)
+        log_data.append({
+            "name": p["name"], "role": p["role"], "tier": p["tier"],
+            "overall": p["overall"], "team": info["team"], "price": info["price"],
+        })
+    return log_data
+
+
 def build_team_csv(team_name):
     """Build a CSV string for a team's full squad."""
     squad = get_full_squad(team_name)
@@ -213,11 +246,13 @@ st.markdown("# 🏏 CricBazaar — Live Auction Planner")
 st.markdown("*Founder's Cup · 44 players · 4 teams · 11 per squad (2 fixed + 9 auction)*")
 
 # ── Tabs ─────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "⚡ Live Auction",
     "📊 Team Dashboard",
     "📋 Player Pool",
     "🏆 My Strategy (Abhijeet)",
+    "🎯 Best Team Builder",
+    "🤖 AI Insights",
     "📈 Tier Analysis",
     "✏️ Edit Ratings",
 ])
@@ -274,6 +309,84 @@ with tab1:
                 <p class="metric-label">Overall: <b>{selected_player['overall']}</b></p>
             </div>
             """, unsafe_allow_html=True)
+
+        # ── Live Bid Advisor (always visible when player selected) ────
+        st.divider()
+        st.markdown("### 🎯 Live Bid Advisor")
+
+        my_team_live = "Abhijeet"
+        my_squad_live = get_full_squad(my_team_live)
+        my_remaining_live = get_team_remaining(my_team_live)
+        my_slots_live = AUCTION_SLOTS - get_auction_count(my_team_live)
+        all_teams_live = build_all_teams_data()
+
+        if my_slots_live > 0:
+            # Quick optimizer recommendation
+            bid_rec = recommend_max_bid(
+                selected_player, my_squad_live, unsold,
+                my_remaining_live, my_slots_live
+            )
+            # Competition analysis
+            competitors = estimate_competition(selected_player, all_teams_live, unsold)
+            price_pred = predict_auction_price(selected_player, all_teams_live, unsold)
+
+            adv1, adv2, adv3 = st.columns(3)
+            with adv1:
+                v_color = {"🟢 MUST BUY": "#28a745", "🟡 GOOD BUY": "#ffc107",
+                           "🟡 NEED-BASED BUY": "#ffc107", "🟡 BOWLING NEED": "#ffc107",
+                           "🔴 SKIP / BASE ONLY": "#dc3545"}.get(bid_rec['verdict'], "#6c757d")
+                st.markdown(f"""
+                <div class="team-card" style="background: {v_color}; text-align: left; padding: 12px;">
+                    <p style="font-size:1.2rem; font-weight:800; margin:0;">{bid_rec['verdict']}</p>
+                    <p style="margin:4px 0;">{bid_rec['verdict_detail']}</p>
+                    <hr style="opacity:0.3">
+                    <p style="font-size:1.3rem; font-weight:700;">💰 Max Bid: ₹{bid_rec['recommended_max']}L</p>
+                    <p style="font-size:0.85rem;">Marginal: +{bid_rec['marginal_value']} OVR | Hard cap: ₹{bid_rec['hard_max']}L</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with adv2:
+                st.markdown(f"""
+                <div class="team-card" style="background: #2c3e50; text-align: left; padding: 12px;">
+                    <p style="font-size:1.2rem; font-weight:800; margin:0;">📊 Price Prediction</p>
+                    <p style="font-size:1.3rem; font-weight:700; margin:8px 0;">₹{price_pred['predicted_price']}L expected</p>
+                    <p>Range: ₹{price_pred['price_range'][0]}L — ₹{price_pred['price_range'][1]}L</p>
+                    <p>Competition: {price_pred['competition_level']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with adv3:
+                st.markdown(f"""
+                <div class="team-card" style="background: #34495e; text-align: left; padding: 12px;">
+                    <p style="font-size:1.2rem; font-weight:800; margin:0;">🏟️ Who'll Compete?</p>
+                """, unsafe_allow_html=True)
+                if competitors:
+                    for comp in competitors[:3]:
+                        emoji = TEAMS.get(comp['team'], {}).get('emoji', '🏏')
+                        st.markdown(
+                            f"  {emoji} **{comp['team']}** — desire: {comp['desire_score']} | "
+                            f"may bid ₹{comp['estimated_max_bid']}L"
+                        )
+                        if comp['reasons']:
+                            st.caption(f"  ↳ {', '.join(comp['reasons'][:2])}")
+                else:
+                    st.markdown("Low competition expected — good chance at base!")
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # AI Quick Insight button
+            if st.button("🤖 Get AI Quick Insight", key="ai_quick_live", use_container_width=True):
+                with st.spinner("🤖 Asking Gemma3 for advice..."):
+                    squad_needs_live = analyze_squad_needs(my_squad_live)
+                    auction_log_live = build_auction_log_data()
+                    insight = get_live_auction_insight(
+                        selected_player, my_squad_live, unsold,
+                        my_remaining_live, my_slots_live,
+                        squad_needs_live, all_teams_live, auction_log_live
+                    )
+                    st.markdown("#### 🤖 AI Quick Take")
+                    st.markdown(insight)
+        else:
+            st.success("Your squad is complete! No more slots to fill.")
 
     # Auction log
     st.divider()
@@ -656,9 +769,296 @@ with tab4:
     )
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 5 — TIER ANALYSIS
+# TAB 5 — BEST TEAM BUILDER (Real-time)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 with tab5:
+    st.markdown("## 🎯 Best Team Builder — Real-Time")
+    st.markdown("*At every point in the auction, here's the best team you can build.*")
+
+    bt_team = "Abhijeet"
+    bt_squad = get_full_squad(bt_team)
+    bt_remaining = get_team_remaining(bt_team)
+    bt_auc_count = get_auction_count(bt_team)
+    bt_slots_left = AUCTION_SLOTS - bt_auc_count
+    bt_unsold = get_unsold_players()
+    bt_all_teams = build_all_teams_data()
+
+    if bt_slots_left > 0 and bt_unsold:
+        snapshot = build_best_team_snapshot(
+            bt_squad, bt_unsold, bt_remaining, bt_slots_left, bt_all_teams
+        )
+
+        # Overview metrics
+        st.markdown("### 📊 Team Rating Forecast")
+        fc1, fc2, fc3, fc4 = st.columns(4)
+        fc1.metric("Current Squad OVR", snapshot["current_ovr"],
+                   delta=f"Avg {snapshot['current_avg']}")
+        fc2.metric("Best Possible OVR", snapshot["best_possible_ovr"],
+                   delta=f"+{round(snapshot['best_possible_ovr'] - snapshot['current_ovr'], 1)}")
+        fc3.metric("Realistic OVR", snapshot["realistic_ovr"],
+                   delta=f"Avg {snapshot['realistic_avg']}")
+        fc4.metric("Slots to Fill", snapshot["slots_left"],
+                   delta=f"₹{snapshot['budget_remaining']}L budget")
+
+        st.divider()
+
+        # Best Possible Dream 11
+        st.markdown("### ⭐ Best Possible Dream 11")
+        st.caption("If you get all optimal picks at base price — the mathematically best squad.")
+        if snapshot["optimal_picks"]:
+            dream_data = []
+            for i, p in enumerate(sorted(snapshot["best_possible_squad"],
+                                         key=lambda x: -x["overall"]), 1):
+                tag = p.get("tag", "")
+                status = "✅ In Squad" if tag else "🎯 Target"
+                can_b = "✅" if p.get("bowling", 0) >= 4 else "❌"
+                dream_data.append({
+                    "#": i, "Name": p["name"], "Role": p["role"],
+                    "Tier": f"⭐{p['tier']}", "OVR": p["overall"],
+                    "Bat": p["batting"], "Bowl": p["bowling"],
+                    "Field": p["fielding"], "Can Bowl": can_b, "Status": status,
+                })
+            st.dataframe(pd.DataFrame(dream_data), use_container_width=True, hide_index=True)
+        else:
+            st.info("No feasible optimal squad found.")
+
+        st.divider()
+
+        # Realistic Team (accounting for competition)
+        st.markdown("### 🏟️ Realistic Team (Competition-Adjusted)")
+        st.caption("Accounts for other teams' likely bids — who you can realistically get.")
+        if snapshot["realistic_picks"]:
+            real_data = []
+            for i, p in enumerate(sorted(snapshot["realistic_squad"],
+                                         key=lambda x: -x["overall"]), 1):
+                tag = p.get("tag", "")
+                if tag:
+                    status = f"✅ {tag}"
+                    est_cost = "Fixed"
+                    comp = "—"
+                    prob = "—"
+                elif "estimated_cost" in p:
+                    status = "🎯 Target"
+                    est_cost = f"₹{p['estimated_cost']}L"
+                    comp = p.get("competition_level", "—")
+                    prob = f"{int(p.get('acq_probability', 0) * 100)}%"
+                else:
+                    status = "✅ Bought"
+                    est_cost = f"₹{p.get('sold_price', 0)}L"
+                    comp = "—"
+                    prob = "—"
+                real_data.append({
+                    "#": i, "Name": p["name"], "Role": p["role"],
+                    "Tier": p["tier"], "OVR": p["overall"],
+                    "Est. Cost": est_cost, "Competition": comp,
+                    "Chance": prob, "Status": status,
+                })
+            st.dataframe(pd.DataFrame(real_data), use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # Priority Targets
+        st.markdown("### 🎯 Priority Targets (Top 10)")
+        st.caption("Players ranked by expected value — factoring in quality AND likelihood of acquisition.")
+        if snapshot["priority_targets"]:
+            pt_data = []
+            for i, t in enumerate(snapshot["priority_targets"], 1):
+                in_opt = "⭐" if t["in_optimal"] else ""
+                pt_data.append({
+                    "Rank": i, "Name": t["name"], "Role": t["role"],
+                    "Tier": t["tier"], "OVR": t["overall"],
+                    "Est. Price": f"₹{t['estimated_cost']}L",
+                    "Competition": t["competition"],
+                    "Chance": f"{int(t['acq_probability'] * 100)}%",
+                    "Value Score": t["value_score"],
+                    "In Optimal": in_opt,
+                })
+            st.dataframe(pd.DataFrame(pt_data), use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # Budget Allocation Strategy
+        st.markdown("### 💰 Budget Allocation Strategy")
+        st.caption(f"How to spend your remaining ₹{bt_remaining}L across {bt_slots_left} slots.")
+        if snapshot["budget_allocation"]:
+            alloc_data = []
+            for a in snapshot["budget_allocation"]:
+                alloc_data.append({
+                    "Slot": a["slot"], "Type": a["type"],
+                    "Target Role": a["target_role"],
+                    "Max Budget": f"₹{a['max_budget']}L",
+                    "Strategy": a["strategy"],
+                })
+            st.dataframe(pd.DataFrame(alloc_data), use_container_width=True, hide_index=True)
+
+            total_priority = sum(a["max_budget"] for a in snapshot["budget_allocation"]
+                                 if a["type"] == "🎯 Priority")
+            total_value = sum(a["max_budget"] for a in snapshot["budget_allocation"]
+                             if a["type"] == "💰 Value")
+            st.markdown(
+                f"**Summary:** Spend up to ₹{total_priority}L on priority picks, "
+                f"₹{total_value}L on value picks. "
+                f"Keep ₹{bt_remaining - total_priority - total_value}L reserve."
+            )
+
+        # AI Best Team Analysis button
+        st.divider()
+        if st.button("🤖 Get AI Best Team Analysis", key="ai_best_team", use_container_width=True):
+            with st.spinner("🤖 Analyzing with Gemma3:4b..."):
+                bt_needs = analyze_squad_needs(bt_squad)
+                insight = get_best_team_analysis(
+                    bt_squad, bt_unsold, bt_remaining, bt_slots_left,
+                    bt_needs, snapshot["optimal_picks"], bt_all_teams
+                )
+                st.markdown("### 🤖 AI Team Building Strategy")
+                st.markdown(insight)
+
+    elif bt_slots_left == 0:
+        st.success("🎉 Your squad is complete! All 11 players selected.")
+        st.markdown("### 📊 Final Squad")
+        final_data = []
+        for i, p in enumerate(sorted(bt_squad, key=lambda x: -x["overall"]), 1):
+            tag = p.get("tag", "Auction")
+            price = f"₹{p.get('sold_price', 0)}L" if p.get("sold_price", 0) > 0 else "Fixed"
+            final_data.append({
+                "#": i, "Name": p["name"], "Role": p["role"],
+                "Tier": p["tier"], "OVR": p["overall"],
+                "Bat": p["batting"], "Bowl": p["bowling"],
+                "Field": p["fielding"], "Type": tag, "Price": price,
+            })
+        st.dataframe(pd.DataFrame(final_data), use_container_width=True, hide_index=True)
+        total_ovr = sum(p["overall"] for p in bt_squad)
+        avg_ovr = round(total_ovr / len(bt_squad), 1)
+        st.metric("Squad Total OVR", total_ovr)
+        st.metric("Squad Avg OVR", avg_ovr)
+    else:
+        st.info("No unsold players remaining.")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 6 — AI INSIGHTS (Ollama + Gemma3:4b)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with tab6:
+    st.markdown("## 🤖 AI Insights — Powered by Ollama (Gemma3:4b)")
+    st.markdown("*Local AI analysis using Google's Gemma3 model via Ollama.*")
+
+    # Ollama status check
+    ollama_ok, ollama_msg = check_ollama_status()
+    if ollama_ok:
+        st.success(ollama_msg)
+    else:
+        st.error(ollama_msg)
+        st.markdown("""
+        ### ⚙️ Setup Instructions
+        1. **Install Ollama:** `brew install ollama` (macOS)
+        2. **Pull the model:** `ollama pull gemma3:4b`
+        3. **Start Ollama:** `ollama serve`
+        4. **Refresh this page**
+        """)
+
+    st.divider()
+
+    ai_team = "Abhijeet"
+    ai_squad = get_full_squad(ai_team)
+    ai_remaining = get_team_remaining(ai_team)
+    ai_slots_left = AUCTION_SLOTS - get_auction_count(ai_team)
+    ai_unsold = get_unsold_players()
+    ai_all_teams = build_all_teams_data()
+    ai_needs = analyze_squad_needs(ai_squad)
+
+    # ── Section 1: Bid Advisor ──
+    st.markdown("### 🎯 AI Bid Advisor")
+    st.caption("Select any unsold player to get AI-powered bid advice.")
+
+    if ai_unsold and ai_slots_left > 0:
+        ai_player_opts = {
+            f"{p['name']} (Tier {p['tier']} | {p['role']} | OVR {p['overall']})": p["id"]
+            for p in sorted(ai_unsold, key=lambda x: -x["overall"])
+        }
+        ai_sel_label = st.selectbox("Select Player for AI Analysis",
+                                    list(ai_player_opts.keys()), key="ai_bid_player")
+        ai_sel_id = ai_player_opts[ai_sel_label]
+        ai_sel_player = next(p for p in ai_unsold if p["id"] == ai_sel_id)
+
+        if st.button("🤖 Get AI Bid Advice", key="ai_bid_btn", use_container_width=True):
+            with st.spinner("🤖 Analyzing with Gemma3:4b... (may take 15-30 seconds)"):
+                optimizer_rec = recommend_max_bid(
+                    ai_sel_player, ai_squad, ai_unsold, ai_remaining, ai_slots_left
+                )
+                advice = get_bid_advice(
+                    ai_sel_player, ai_squad, ai_unsold, ai_remaining, ai_slots_left,
+                    ai_needs, optimizer_rec, ai_all_teams
+                )
+                st.markdown(f"### 🤖 AI Bid Advice for {ai_sel_player['name']}")
+                st.markdown(advice)
+    else:
+        if ai_slots_left == 0:
+            st.success("Your squad is complete!")
+        else:
+            st.info("No unsold players available.")
+
+    st.divider()
+
+    # ── Section 2: Player Comparison ──
+    st.markdown("### ⚖️ AI Player Comparison")
+    st.caption("Compare two players head-to-head — who should you target?")
+
+    if len(ai_unsold) >= 2:
+        cmp_col1, cmp_col2 = st.columns(2)
+        cmp_opts = {
+            f"{p['name']} ({p['role']} | T{p['tier']})": p["id"]
+            for p in sorted(ai_unsold, key=lambda x: -x["overall"])
+        }
+        with cmp_col1:
+            cmp1_label = st.selectbox("Player 1", list(cmp_opts.keys()), key="cmp1")
+            cmp1_id = cmp_opts[cmp1_label]
+        with cmp_col2:
+            cmp2_options = [k for k in cmp_opts.keys() if cmp_opts[k] != cmp1_id]
+            cmp2_label = st.selectbox("Player 2", cmp2_options, key="cmp2")
+            cmp2_id = cmp_opts[cmp2_label]
+
+        if st.button("🤖 Compare Players", key="ai_cmp_btn", use_container_width=True):
+            with st.spinner("🤖 Comparing players..."):
+                p1 = next(p for p in ai_unsold if p["id"] == cmp1_id)
+                p2 = next(p for p in ai_unsold if p["id"] == cmp2_id)
+                comparison = get_player_comparison(p1, p2, ai_squad, ai_needs, ai_remaining)
+                st.markdown(f"### ⚖️ {p1['name']} vs {p2['name']}")
+                st.markdown(comparison)
+
+    st.divider()
+
+    # ── Section 3: Team Review & Power Rankings ──
+    st.markdown("### 🏆 AI Power Rankings & Team Review")
+    st.caption("Get an AI analysis of all 4 teams — strengths, weaknesses, and predictions.")
+
+    if st.button("🤖 Generate Power Rankings", key="ai_power_btn", use_container_width=True):
+        with st.spinner("🤖 Analyzing all teams..."):
+            review = get_post_auction_review(ai_squad, ai_remaining, ai_needs, ai_all_teams)
+            st.markdown("### 🏆 AI Power Rankings")
+            st.markdown(review)
+
+    st.divider()
+
+    # ── Section 4: Full Strategy Brief ──
+    st.markdown("### 📋 AI Full Strategy Brief")
+    st.caption("Comprehensive AI strategy for the rest of the auction.")
+
+    if ai_unsold and ai_slots_left > 0:
+        if st.button("🤖 Generate Full Strategy", key="ai_strategy_btn", use_container_width=True):
+            with st.spinner("🤖 Building comprehensive strategy... (may take 30-60 seconds)"):
+                optimal = solve_optimal_squad(ai_unsold, ai_squad, ai_remaining, ai_slots_left)
+                strategy = get_best_team_analysis(
+                    ai_squad, ai_unsold, ai_remaining, ai_slots_left,
+                    ai_needs, optimal if optimal else [], ai_all_teams
+                )
+                st.markdown("### 📋 Full AI Strategy")
+                st.markdown(strategy)
+    else:
+        st.info("Strategy brief available when there are unsold players and open slots.")
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TAB 7 — TIER ANALYSIS
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+with tab7:
     st.markdown("## 📈 Tier-Level Distribution Analysis")
 
     # Overall tier distribution
@@ -758,9 +1158,9 @@ with tab5:
         """, unsafe_allow_html=True)
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 6 — EDIT PLAYER RATINGS
+# TAB 8 — EDIT PLAYER RATINGS
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-with tab6:
+with tab8:
     st.markdown("## ✏️ Edit Player Ratings")
     st.markdown("*Update batting, bowling & fielding ratings. Tier and role auto-recalculate.*")
 
