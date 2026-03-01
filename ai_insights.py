@@ -1,6 +1,6 @@
 """
-🤖 CricBazaar — AI Insights Engine (Ollama + Gemma3:4b)
-Connects to local Ollama instance running gemma3:4b model
+🤖 CricBazaar — AI Insights Engine (Ollama + Qwen2.5:7b)
+Connects to local Ollama instance running qwen2.5:7b model
 to provide natural language auction strategy insights.
 """
 
@@ -9,12 +9,12 @@ import json
 
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "gemma3:4b"
+MODEL_NAME = "qwen2.5:7b" # Ensure this matches the model you pulled "gemma3:4b"
 
 
 def _call_ollama(prompt, timeout=60):
     """
-    Call local Ollama API with gemma3:4b model.
+    Call local Ollama API with qwen2.5:7b model.
     Returns the generated text or an error message.
     """
     try:
@@ -42,7 +42,7 @@ def _call_ollama(prompt, timeout=60):
             "⚠️ Cannot connect to Ollama. Make sure Ollama is running locally.\n\n"
             "**Setup instructions:**\n"
             "1. Install Ollama: `brew install ollama` (macOS) or visit https://ollama.ai\n"
-            "2. Pull the model: `ollama pull gemma3:4b`\n"
+            "2. Pull the model: `ollama pull qwen2.5:7b`\n"
             "3. Start Ollama: `ollama serve`\n"
             "4. Refresh this page."
         )
@@ -53,7 +53,7 @@ def _call_ollama(prompt, timeout=60):
 
 
 def check_ollama_status():
-    """Check if Ollama is running and gemma3:4b model is available."""
+    """Check if Ollama is running and qwen2.5:7b model is available."""
     try:
         # Check if Ollama is running
         resp = requests.get("http://localhost:11434/api/tags", timeout=5)
@@ -63,12 +63,12 @@ def check_ollama_status():
         models = resp.json().get("models", [])
         model_names = [m.get("name", "") for m in models]
 
-        # Check for gemma3:4b (might be listed as gemma3:4b or gemma3:4b-latest)
-        has_model = any("gemma3" in name for name in model_names)
+        # Check for qwen2.5:7b (might be listed as qwen2.5:7b or qwen2.5:7b-latest)
+        has_model = any("qwen2.5" in name for name in model_names)
         if not has_model:
-            return False, f"Model gemma3:4b not found. Available: {', '.join(model_names) if model_names else 'None'}. Run `ollama pull gemma3:4b`."
+            return False, f"Model qwen2.5:7b not found. Available: {', '.join(model_names) if model_names else 'None'}. Run `ollama pull qwen2.5:7b`."
 
-        return True, "✅ Ollama is running with gemma3:4b model."
+        return True, "✅ Ollama is running with qwen2.5:7b model."
     except requests.exceptions.ConnectionError:
         return False, "Ollama is not running. Start it with `ollama serve`."
     except Exception as e:

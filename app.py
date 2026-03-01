@@ -375,7 +375,7 @@ with tab1:
 
             # AI Quick Insight button
             if st.button("🤖 Get AI Quick Insight", key="ai_quick_live", use_container_width=True):
-                with st.spinner("🤖 Asking Gemma3 for advice..."):
+                with st.spinner("🤖 Asking Qwen2.5 for advice..."):
                     squad_needs_live = analyze_squad_needs(my_squad_live)
                     auction_log_live = build_auction_log_data()
                     insight = get_live_auction_insight(
@@ -904,7 +904,7 @@ with tab5:
         # AI Best Team Analysis button
         st.divider()
         if st.button("🤖 Get AI Best Team Analysis", key="ai_best_team", use_container_width=True):
-            with st.spinner("🤖 Analyzing with Gemma3:4b..."):
+            with st.spinner("🤖 Analyzing with Qwen2.5:7b..."):
                 bt_needs = analyze_squad_needs(bt_squad)
                 insight = get_best_team_analysis(
                     bt_squad, bt_unsold, bt_remaining, bt_slots_left,
@@ -935,11 +935,11 @@ with tab5:
         st.info("No unsold players remaining.")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# TAB 6 — AI INSIGHTS (Ollama + Gemma3:4b)
+# TAB 6 — AI INSIGHTS (Ollama + Qwen2.5:7b)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 with tab6:
-    st.markdown("## 🤖 AI Insights — Powered by Ollama (Gemma3:4b)")
-    st.markdown("*Local AI analysis using Google's Gemma3 model via Ollama.*")
+    st.markdown("## 🤖 AI Insights — Powered by Ollama (Qwen2.5:7b)")
+    st.markdown("*Local AI analysis using Alibaba's Qwen2.5 model via Ollama.*")
 
     # Ollama status check
     ollama_ok, ollama_msg = check_ollama_status()
@@ -950,7 +950,7 @@ with tab6:
         st.markdown("""
         ### ⚙️ Setup Instructions
         1. **Install Ollama:** `brew install ollama` (macOS)
-        2. **Pull the model:** `ollama pull gemma3:4b`
+        2. **Pull the model:** `ollama pull qwen2.5:7b`
         3. **Start Ollama:** `ollama serve`
         4. **Refresh this page**
         """)
@@ -980,7 +980,7 @@ with tab6:
         ai_sel_player = next(p for p in ai_unsold if p["id"] == ai_sel_id)
 
         if st.button("🤖 Get AI Bid Advice", key="ai_bid_btn", use_container_width=True):
-            with st.spinner("🤖 Analyzing with Gemma3:4b... (may take 15-30 seconds)"):
+            with st.spinner("🤖 Analyzing with Qwen2.5:7b... (may take 15-30 seconds)"):
                 optimizer_rec = recommend_max_bid(
                     ai_sel_player, ai_squad, ai_unsold, ai_remaining, ai_slots_left
                 )

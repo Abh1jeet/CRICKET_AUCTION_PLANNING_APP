@@ -65,7 +65,7 @@ Each player has three ratings (0–10 scale):
 | 🎳 Bowling | 40% | Bowling ability |
 | 🧤 Fielding | 20% | Fielding ability |
 
-**Overall Rating** = `Batting × 0.40 + Bowling × 0.40 + Fielding × 0.20`
+**Overall Rating** = `Batting × 0.40 + Bowling × 0.40 + Fielding × 0.2`
 
 ### Role Classification
 
