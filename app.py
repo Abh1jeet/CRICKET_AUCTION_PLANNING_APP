@@ -895,10 +895,12 @@ with tab5:
                                  if a["type"] == "🎯 Priority")
             total_value = sum(a["max_budget"] for a in snapshot["budget_allocation"]
                              if a["type"] == "💰 Value")
+            total_allocated = total_priority + total_value
+            reserve = bt_remaining - total_allocated
             st.markdown(
                 f"**Summary:** Spend up to ₹{total_priority}L on priority picks, "
                 f"₹{total_value}L on value picks. "
-                f"Keep ₹{bt_remaining - total_priority - total_value}L reserve."
+                f"Total: ₹{total_allocated}L / ₹{bt_remaining}L budget."
             )
 
         # AI Best Team Analysis button

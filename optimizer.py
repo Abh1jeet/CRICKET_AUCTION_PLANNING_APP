@@ -330,6 +330,7 @@ def estimate_competition(player, all_teams_data, unsold_players):
         sorted by desire_score descending.
     """
     competitors = []
+    total_unsold = len(unsold_players)
 
     for team_name, team_info in all_teams_data.items():
         if team_name == "Abhijeet":
@@ -342,47 +343,61 @@ def estimate_competition(player, all_teams_data, unsold_players):
         if slots_left <= 0 or budget_left < BASE_PRICE:
             continue
 
+        # Hard max this team can bid
+        hard_max = budget_left - (slots_left - 1) * BASE_PRICE if slots_left > 1 else budget_left
+
         # Analyze what this team needs
         needs = analyze_squad_needs(squad)
         role = player["role"]
         desire = 0.0
         reasons = []
 
-        # Role need
+        # Role need (only if team genuinely lacks this role)
         if role in needs["role_needs"]:
-            desire += 3.0
+            desire += 2.0
             reasons.append(f"Needs {role}")
 
         # Bowling need
         if needs["bowlers_needed"] > 0 and _can_bowl(player):
-            desire += 2.5
+            desire += 1.5
             reasons.append(f"Needs bowling ({needs['bowlers_needed']} more)")
 
-        # High-rated player attraction (all teams want stars)
+        # High-rated player attraction (scaled down — not every team bids big for stars)
         if player["tier"] == 1:
-            desire += 3.0
+            desire += 1.5
             reasons.append("Elite player (Tier 1)")
         elif player["tier"] == 2:
-            desire += 1.5
+            desire += 0.5
             reasons.append("Strong player (Tier 2)")
 
-        # Scarcity: if few similar players left in pool
+        # Scarcity: only matters when pool is running thin
         same_role_remaining = sum(1 for p in unsold_players
                                    if p["role"] == role and p["id"] != player["id"])
-        if same_role_remaining <= slots_left:
-            desire += 2.0
+        if same_role_remaining < slots_left and same_role_remaining <= 3:
+            desire += 1.0
             reasons.append(f"Only {same_role_remaining} {role}s left in pool")
 
-        # Budget capacity: teams with more budget bid higher
-        budget_ratio = budget_left / BUDGET_PER_TEAM
-        desire *= (0.5 + budget_ratio)
+        # Budget capacity: slight influence (not a multiplier to prevent blowup)
+        # Teams with less budget are less aggressive
+        budget_factor = min(1.0, budget_left / (slots_left * BASE_PRICE * 2))
+        desire *= (0.6 + budget_factor * 0.4)
 
-        # Estimate their max bid
-        hard_max = budget_left - (slots_left - 1) * BASE_PRICE if slots_left > 1 else budget_left
-        estimated_bid = min(
-            int(BASE_PRICE + desire * 2.5),
+        # Auction progress factor: early in auction, competition is spread thin
+        # (36 players for 36 slots = everyone gets someone)
+        total_slots_all_teams = sum(t["slots_left"] for t in all_teams_data.values())
+        if total_unsold > 0:
+            supply_ratio = total_unsold / max(total_slots_all_teams, 1)
+            if supply_ratio > 1.5:
+                # Plenty of players available, less urgency
+                desire *= 0.6
+
+        # Estimate their max bid — conservative: based on even budget split
+        avg_budget_per_slot = budget_left / max(slots_left, 1)
+        estimated_bid = int(min(
+            BASE_PRICE + desire * 1.5,
+            avg_budget_per_slot * 1.3,  # won't spend more than ~1.3× their average per slot
             hard_max
-        )
+        ))
         estimated_bid = max(estimated_bid, BASE_PRICE)
 
         if desire > 0:
@@ -425,24 +440,26 @@ def predict_auction_price(player, all_teams_data, unsold_players):
     else:
         predicted = bids[0]
 
-    # Adjust for player quality
-    tier_mult = {1: 1.4, 2: 1.2, 3: 1.0, 4: 0.9}.get(player["tier"], 1.0)
-    predicted = int(predicted * tier_mult)
+    # Keep predicted price reasonable — no tier multiplier blowup
     predicted = max(predicted, BASE_PRICE)
 
-    # Competition level
+    # Competition level — based on number of genuinely interested teams
+    num_competing = sum(1 for c in competitors if c["desire_score"] > 2.5)
     top_desire = competitors[0]["desire_score"] if competitors else 0
-    num_competing = sum(1 for c in competitors if c["desire_score"] > 2)
 
-    if num_competing >= 3 or top_desire > 8:
+    if num_competing >= 3 and top_desire > 5:
         level = "🔴 Fierce"
-    elif num_competing >= 2 or top_desire > 5:
+    elif num_competing >= 2 or top_desire > 3.5:
         level = "🟡 Moderate"
     else:
         level = "🟢 Low"
 
-    low_price = max(BASE_PRICE, int(predicted * 0.7))
-    high_price = min(int(predicted * 1.5), max(c["estimated_max_bid"] for c in competitors))
+    # Price range: keep it tight and realistic
+    low_price = max(BASE_PRICE, predicted - 2)
+    high_price = max(predicted + 3, min(
+        int(predicted * 1.3),
+        max(c["estimated_max_bid"] for c in competitors)
+    ))
 
     return {
         "predicted_price": predicted,
@@ -498,36 +515,53 @@ def build_best_team_snapshot(my_squad, unsold_players, budget_remaining, slots_l
     remaining_budget = budget_remaining
     remaining_slots = slots_left
 
-    # Score each player factoring in competition
+    # Score each player factoring in competition AND quality
     scored_players = []
+    needs_analysis = analyze_squad_needs(my_squad)
+    optimal_ids = {op["id"] for op in optimal_picks} if optimal_picks else set()
+
     for p in unsold_players:
         comp = estimate_competition(p, all_teams_data, unsold_players)
-        competing_teams = len([c for c in comp if c["desire_score"] > 3])
-        # Acquisition probability: lower if many teams want this player
-        acq_prob = max(0.1, 1.0 - competing_teams * 0.25)
+        competing_teams = len([c for c in comp if c["desire_score"] > 2.5])
+        # Acquisition probability: based on how many teams seriously want this player
+        # With 4 teams total (3 rivals), even 2 competitors leaves a decent chance
+        acq_prob = max(0.15, 1.0 - competing_teams * 0.2)
 
         predicted = predict_auction_price(p, all_teams_data, unsold_players)
         est_cost = predicted["predicted_price"]
 
-        value_score = _player_value_score(p, analyze_squad_needs(my_squad)["role_needs"])
+        value_score = _player_value_score(p, needs_analysis["role_needs"])
+
+        # CRITICAL: Boost players that the MILP optimizer chose
+        # The optimizer already found the mathematically best set — trust it
+        if p["id"] in optimal_ids:
+            value_score += 5.0
+
+        # Also weight raw overall rating more heavily — quality matters
+        value_score += p["overall"] * 0.3
 
         scored_players.append({
             **p,
             "acq_probability": round(acq_prob, 2),
             "estimated_cost": est_cost,
-            "value_score": value_score,
+            "value_score": round(value_score, 2),
             "expected_value": round(value_score * acq_prob, 2),
             "competition_level": predicted["competition_level"],
         })
 
     scored_players.sort(key=lambda x: -x["expected_value"])
 
+    # Fill realistic picks ensuring we stay within budget
     for p in scored_players:
         if remaining_slots <= 0:
             break
-        if p["estimated_cost"] <= remaining_budget - (remaining_slots - 1) * BASE_PRICE:
-            realistic_picks.append(p)
-            remaining_budget -= p["estimated_cost"]
+        # Must always keep enough for remaining slots at base price
+        max_spendable = remaining_budget - (remaining_slots - 1) * BASE_PRICE
+        cost = min(p["estimated_cost"], max_spendable)
+        if cost >= BASE_PRICE:
+            p_copy = {**p, "estimated_cost": cost}
+            realistic_picks.append(p_copy)
+            remaining_budget -= cost
             remaining_slots -= 1
 
     realistic_full = my_squad + realistic_picks
@@ -579,15 +613,12 @@ def _compute_budget_allocation(unsold_players, my_squad, budget_remaining, slots
     Suggest how to allocate budget across remaining slots.
 
     Strategy: spend more on high-tier targets, save base price for fillers.
+    Guarantee: total allocation ≤ budget_remaining, no negative reserve.
     """
     if slots_left <= 0:
         return []
 
     needs = analyze_squad_needs(my_squad)
-
-    # Categorize remaining slots
-    allocation = []
-    reserved = 0
 
     # Priority slots: roles we desperately need
     urgent_roles = [r for r in needs["role_needs"] if r != "need_bowlers"]
@@ -597,28 +628,52 @@ def _compute_budget_allocation(unsold_players, my_squad, budget_remaining, slots
     n_priority = min(len(urgent_roles), slots_left)
     n_filler = slots_left - n_priority
 
-    # Reserve base price for fillers
-    filler_reserve = n_filler * BASE_PRICE
-    priority_budget = budget_remaining - filler_reserve
+    # Reserve base price for ALL slots first (guaranteed minimum)
+    minimum_total = slots_left * BASE_PRICE
+    if budget_remaining < minimum_total:
+        # Edge case: not enough for even base prices (shouldn't happen but be safe)
+        per_slot = int(budget_remaining / slots_left)
+        return [{
+            "slot": i + 1, "type": "💰 Value", "target_role": "Best available",
+            "max_budget": per_slot, "strategy": "Budget constrained — pick cheapest",
+        } for i in range(slots_left)]
+
+    # Extra budget above the base-price floor
+    extra_budget = budget_remaining - minimum_total  # always ≥ 0
+
+    # Distribute extra budget: priority slots get a share, fillers stay at base
+    allocation = []
+    total_allocated = 0
 
     if n_priority > 0:
-        per_priority = int(priority_budget / n_priority)
+        # Give priority slots an equal share of extra budget
+        extra_per_priority = int(extra_budget / n_priority)
+        # But cap each slot to the hard max (can't exceed what leaves base for rest)
         for i, role in enumerate(urgent_roles[:n_priority]):
+            slot_max = BASE_PRICE + extra_per_priority
+            # Also can't exceed the hard cap for this position in the sequence
+            remaining_after = budget_remaining - total_allocated
+            hard_cap = remaining_after - (slots_left - len(allocation) - 1) * BASE_PRICE
+            slot_max = min(slot_max, hard_cap)
+            slot_max = max(slot_max, BASE_PRICE)
+
             allocation.append({
                 "slot": i + 1,
                 "type": "🎯 Priority",
                 "target_role": role,
-                "max_budget": min(per_priority, budget_remaining - (slots_left - 1) * BASE_PRICE),
-                "strategy": "Bid aggressively for top picks",
+                "max_budget": slot_max,
+                "strategy": "Bid up to this amount for top picks",
             })
+            total_allocated += slot_max
 
     for i in range(n_filler):
         allocation.append({
             "slot": n_priority + i + 1,
             "type": "💰 Value",
             "target_role": "Best available",
-            "max_budget": BASE_PRICE + 3,
+            "max_budget": BASE_PRICE,
             "strategy": "Pick at or near base price",
         })
+        total_allocated += BASE_PRICE
 
     return allocation
