@@ -47,15 +47,15 @@ AUCTION_PLAYERS = [
 CAPTAINS = [
     {"id": 37, "name": "Abhijeet",  "batting": 7, "bowling": 6, "fielding": 9, "tag": "Captain",      "team": "Abhijeet",  "forced_role": "All-rounder"},
     {"id": 38, "name": "Saurav",    "batting": 4, "bowling": 8, "fielding": 5, "tag": "Captain",      "team": "Saurav",    "forced_role": "Bowler"},
-    {"id": 39, "name": "Vishal",    "batting": 8, "bowling": 2, "fielding": 7, "tag": "Captain",      "team": "Vishal",    "forced_role": "Batsman"},
+    {"id": 39, "name": "Vishal",    "batting": 8, "bowling": 0, "fielding": 7, "tag": "Captain",      "team": "Vishal",    "forced_role": "Batsman"},
     {"id": 40, "name": "Pravakar",  "batting": 6, "bowling": 10, "fielding": 8, "tag": "Captain",      "team": "Pravakar",  "forced_role": "Bowler"},
 ]
 
 # ── 4 Vice-Captains / Marquee (IDs 41-44) — pre-assigned, always Tier 1
 VICE_CAPTAINS = [
-    {"id": 41, "name": "Vivek C",       "batting": 6, "bowling": 10, "fielding": 7, "tag": "Vice-Captain", "team": "Abhijeet",  "forced_role": "All-rounder"},
-    {"id": 42, "name": "Shubham",       "batting": 10, "bowling": 2, "fielding": 10, "tag": "Vice-Captain", "team": "Saurav",    "forced_role": "Batsman"},
-    {"id": 43, "name": "Aniket (VC)",   "batting": 7, "bowling": 9, "fielding": 7, "tag": "Vice-Captain", "team": "Vishal",    "forced_role": "All-rounder"},
+    {"id": 41, "name": "Vivek C",       "batting": 7, "bowling": 10, "fielding": 8, "tag": "Vice-Captain", "team": "Abhijeet",  "forced_role": "All-rounder"},
+    {"id": 42, "name": "Shubham",       "batting": 10, "bowling": 5, "fielding": 10, "tag": "Vice-Captain", "team": "Saurav",    "forced_role": "Batsman"},
+    {"id": 43, "name": "Aniket (VC)",   "batting": 8, "bowling": 9, "fielding": 8, "tag": "Vice-Captain", "team": "Vishal",    "forced_role": "All-rounder"},
     {"id": 44, "name": "Padam",         "batting": 7, "bowling": 10, "fielding": 6, "tag": "Vice-Captain", "team": "Pravakar",  "forced_role": "All-rounder"},
 ]
 
