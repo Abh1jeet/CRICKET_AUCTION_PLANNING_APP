@@ -12,18 +12,18 @@ AUCTION_PLAYERS = [
     {"id": 5,  "name": "Vivek Sharma",   "batting": 7, "bowling": 0, "fielding": 5},
     {"id": 6,  "name": "Alok",           "batting": 5, "bowling": 5, "fielding": 5},
     {"id": 7,  "name": "Yadu",           "batting": 9, "bowling": 0, "fielding": 7},
-    {"id": 8,  "name": "Aravinth",       "batting": 0, "bowling": 8, "fielding": 0},
+    {"id": 8,  "name": "Aravinth",       "batting": 0, "bowling": 9, "fielding": 0},
     {"id": 9,  "name": "Mehul",          "batting": 5, "bowling": 7, "fielding": 2},
     {"id": 10, "name": "Ashish P",       "batting": 2, "bowling": 0, "fielding": 6},
     {"id": 11, "name": "Vikash",         "batting": 5, "bowling": 5, "fielding": 5},
     {"id": 12, "name": "Sailendra",      "batting": 7, "bowling": 4, "fielding": 8},
-    {"id": 13, "name": "Vishwash",       "batting": 7, "bowling": 4, "fielding": 6},
+    {"id": 13, "name": "Vishwash",       "batting": 8, "bowling": 4, "fielding": 6},
     {"id": 14, "name": "Rajeev Kumar",   "batting": 4, "bowling": 4, "fielding": 4},
     {"id": 15, "name": "Amit",           "batting": 4, "bowling": 4, "fielding": 4},
     {"id": 16, "name": "Abhinav",        "batting": 4, "bowling": 4, "fielding": 4},
     {"id": 17, "name": "Atul",           "batting": 7, "bowling": 9, "fielding": 9},
     {"id": 18, "name": "Dillip",         "batting": 7, "bowling": 0, "fielding": 4},
-    {"id": 19, "name": "Lamby",          "batting": 2, "bowling": 7, "fielding": 5},
+    {"id": 19, "name": "Lamby",          "batting": 2, "bowling": 8, "fielding": 5},
     {"id": 20, "name": "Ashish Anand",   "batting": 5, "bowling": 0, "fielding": 7},
     {"id": 21, "name": "Aniket Bhat",    "batting": 7, "bowling": 7, "fielding": 7},
     {"id": 22, "name": "Harish",         "batting": 5, "bowling": 10, "fielding": 5},
@@ -45,18 +45,18 @@ AUCTION_PLAYERS = [
 
 # ── 4 Captains (IDs 37-40) — pre-assigned, always Tier 1 ────────────
 CAPTAINS = [
-    {"id": 37, "name": "Abhijeet",  "batting": 7, "bowling": 7, "fielding": 7, "tag": "Captain",      "team": "Abhijeet",  "forced_role": "All-rounder"},
+    {"id": 37, "name": "Abhijeet",  "batting": 7, "bowling": 6, "fielding": 9, "tag": "Captain",      "team": "Abhijeet",  "forced_role": "All-rounder"},
     {"id": 38, "name": "Saurav",    "batting": 4, "bowling": 8, "fielding": 5, "tag": "Captain",      "team": "Saurav",    "forced_role": "Bowler"},
     {"id": 39, "name": "Vishal",    "batting": 8, "bowling": 2, "fielding": 7, "tag": "Captain",      "team": "Vishal",    "forced_role": "Batsman"},
-    {"id": 40, "name": "Pravakar",  "batting": 4, "bowling": 8, "fielding": 5, "tag": "Captain",      "team": "Pravakar",  "forced_role": "Bowler"},
+    {"id": 40, "name": "Pravakar",  "batting": 6, "bowling": 10, "fielding": 8, "tag": "Captain",      "team": "Pravakar",  "forced_role": "Bowler"},
 ]
 
 # ── 4 Vice-Captains / Marquee (IDs 41-44) — pre-assigned, always Tier 1
 VICE_CAPTAINS = [
-    {"id": 41, "name": "Vivek C",       "batting": 7, "bowling": 5, "fielding": 6, "tag": "Vice-Captain", "team": "Abhijeet",  "forced_role": "All-rounder"},
-    {"id": 42, "name": "Shubham",       "batting": 8, "bowling": 2, "fielding": 6, "tag": "Vice-Captain", "team": "Saurav",    "forced_role": "Batsman"},
-    {"id": 43, "name": "Aniket (VC)",   "batting": 7, "bowling": 7, "fielding": 7, "tag": "Vice-Captain", "team": "Vishal",    "forced_role": "All-rounder"},
-    {"id": 44, "name": "Padam",         "batting": 6, "bowling": 6, "fielding": 6, "tag": "Vice-Captain", "team": "Pravakar",  "forced_role": "All-rounder"},
+    {"id": 41, "name": "Vivek C",       "batting": 6, "bowling": 10, "fielding": 7, "tag": "Vice-Captain", "team": "Abhijeet",  "forced_role": "All-rounder"},
+    {"id": 42, "name": "Shubham",       "batting": 10, "bowling": 2, "fielding": 10, "tag": "Vice-Captain", "team": "Saurav",    "forced_role": "Batsman"},
+    {"id": 43, "name": "Aniket (VC)",   "batting": 7, "bowling": 9, "fielding": 7, "tag": "Vice-Captain", "team": "Vishal",    "forced_role": "All-rounder"},
+    {"id": 44, "name": "Padam",         "batting": 7, "bowling": 10, "fielding": 6, "tag": "Vice-Captain", "team": "Pravakar",  "forced_role": "All-rounder"},
 ]
 
 # ── Combined list of all 44 players ──────────────────────────────────
@@ -103,7 +103,7 @@ def classify_role(player):
 
 def compute_overall(player):
     """Weighted overall rating: Bat 40%, Bowl 35%, Field 25%."""
-    return round(player["batting"] * 0.40 + player["bowling"] * 0.35 + player["fielding"] * 0.25, 1)
+    return round(player["batting"] * 0.40 + player["bowling"] * 0.40 + player["fielding"] * 0.20, 1)
 
 
 def classify_tier(player):

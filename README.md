@@ -62,10 +62,10 @@ Each player has three ratings (0–10 scale):
 | Rating | Weight | Description |
 |--------|--------|-------------|
 | 🏏 Batting | 40% | Batting ability |
-| 🎳 Bowling | 35% | Bowling ability |
-| 🧤 Fielding | 25% | Fielding ability |
+| 🎳 Bowling | 40% | Bowling ability |
+| 🧤 Fielding | 20% | Fielding ability |
 
-**Overall Rating** = `Batting × 0.40 + Bowling × 0.35 + Fielding × 0.25`
+**Overall Rating** = `Batting × 0.40 + Bowling × 0.40 + Fielding × 0.20`
 
 ### Role Classification
 
